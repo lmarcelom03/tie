@@ -1,25 +1,19 @@
-*******************************************************
-* RESULTADOS – TESIS (Stata .do)  [Versión complementada]
-* Integra idea final (A/B/C/D, shifts y prueba "¿afecta por igual?")
-*******************************************************
 
 version 17.0
 clear all
 set more off
 macro drop _all
 
-*******************************************************
-* 0) Rutas
-*******************************************************
+* Rutas
+
 local xls "Combinación_Resultados.xlsx"
 local sheet "Hoja1"
 
-*******************************************************
-* 1) Importar y preparar
-*******************************************************
+* Importar
+
 import excel using "`xls'", sheet("`sheet'") firstrow clear
 
-* 1.1) Mantener solo filas de participantes (id presente)
+* Mantener solo filas de participantes (id presente)
 capture confirm variable participant_id_in_session
 if _rc!=0 {
     di as err "No se encuentra 'participant_id_in_session' en la hoja. Revisa nombres."
@@ -28,7 +22,7 @@ if _rc!=0 {
 }
 drop if missing(participant_id_in_session)
 
-* 1.2) Reconstruir etiqueta de grupo (Control/Tratamiento)
+* Reconstruir etiqueta de grupo (Control/Tratamiento)
 capture confirm variable Unnamed__0
 if _rc==0 {
     gen str80 group_label = Unnamed__0
@@ -60,7 +54,7 @@ gen byte mujer = (lower(sexo_str)=="female")
 label define lb_sex 0 "Hombre" 1 "Mujer"
 label values mujer lb_sex
 
-* Encuesta (autorreporte)
+* Encuesta 
 capture rename TESIS_TOTAL_C_1_player_Preg_Optimismo preg_optimismo
 capture rename TESIS_TOTAL_C_1_player_Preg_Confianza preg_confianza
 
@@ -70,9 +64,8 @@ capture egen gk_ok_total = rowtotal(TESIS_TOTAL_C_1_player_gk_1_ok ///
                                     TESIS_TOTAL_C_1_player_gk_3_ok ///
                                     TESIS_TOTAL_C_1_player_gk_4_ok)
 
-*******************************************************
-* 2) Promedios por sección A/B/C/D (p_blue) y SHIFTS
-*******************************************************
+* Promedios por sección A/B/C/D (p_blue)
+
 * Detectar columnas por patrón (robusto a mayúsculas)
 ds *p_blue*_*_A*, has(type numeric)
 local Avars `r(varlist)'
@@ -104,7 +97,7 @@ gen shift_B = pB - pA if !missing(pB, pA)
 gen shift_C = pC - pA if !missing(pC, pA)
 gen shift_D = pD - pA if !missing(pD, pA)
 
-* Variables “pre” y “post” estilo anterior (si las necesitas en anexos)
+* Variables “pre” y “post” estilo anterior (EN CASO DE SER NECESARIO EN ANEXOS)
 capture drop optim_pre optim_post d_optim
 if "`Avars'"!="" {
     egen optim_pre  = rowmean(`Avars')
@@ -117,9 +110,8 @@ gen d_optim = optim_post - optim_pre
 * Mantener muestra válida para análisis principal (requiere A y D)
 drop if missing(pA, pD, treat)
 
-*******************************************************
-* 3) Descriptivos y verificaciones
-*******************************************************
+* Descriptivos
+
 di as txt "=== Descriptivos base ==="
 summ pA pB pC pD shift_B shift_C shift_D preg_optimismo preg_confianza edad mujer
 
@@ -127,9 +119,9 @@ di as txt "=== Balance pre-tratamiento (shifts B y C no deben diferir por grupo)
 ttest shift_B, by(treat)
 ttest shift_C, by(treat)
 
-*******************************************************
-* 4) Gráficos de distribuciones (A vs D por grupo)
-*******************************************************
+
+* Gráficos de distribuciones (A vs D por grupo)
+
 twoway (kdensity pA if treat==0) (kdensity pA if treat==1), ///
        legend(order(1 "Control" 2 "Tratamiento")) ///
        title("Distribución p(A) por grupo") name(gA, replace)
@@ -146,16 +138,15 @@ graph bar shift_B shift_C shift_D, over(treat) ///
     legend(order(1 "Optimismo (B−A)" 2 "Exceso (C−A)" 3 "Combinado (D−A)"))
 restore
 
-*******************************************************
-* 5) Modelos principales
-*******************************************************
+* Modelos principales
+
 eststo clear
 
-* 5.1) ANCOVA del shift combinado (D−A) controlando niveles pre (B−A y C−A)
+* ANCOVA del shift combinado (D−A) controlando niveles pre (B−A y C−A)
 reg shift_D i.treat c.shift_B c.shift_C c.edad i.mujer, vce(robust)
 eststo m_ancova_comb
 
-* 5.2) Impacto diferencial del feedback: ¿afecta por igual optimismo y exceso?
+* Impacto diferencial del feedback: ¿afecta por igual optimismo y exceso?
 *     Interacciones: cambio en la pendiente de D−A respecto a B−A y C−A en Tratamiento.
 reg shift_D c.shift_B##i.treat c.shift_C##i.treat c.edad i.mujer, vce(robust)
 eststo m_diffimpact
@@ -163,16 +154,16 @@ eststo m_diffimpact
 * Prueba conjunta: igual corrección en ambos sesgos
 test 1.treat#c.shift_B = 1.treat#c.shift_C
 
-* 5.3) Chequeo estilo DiD simple (A→D) como en versión previa
+* Chequeo estilo DiD simple (A→D) como en versión previa
 reg optim_post i.treat c.optim_pre c.edad i.mujer, vce(robust)
 eststo m_ancova_level
 reg d_optim i.treat c.edad i.mujer, vce(robust)
 eststo m_did_level
 
-*******************************************************
-* 6) Robustez opcional
-*******************************************************
-* 6.1) Añadir desempeño (proxy de habilidad) al marco Heger & Papageorge
+
+* Robustez (VERIFICAR) OPCIONAL
+
+* Añadir desempeño (proxy de habilidad) al marco Heger & Papageorge
 *      Si gk_ok_total está disponible, controla por P (performance)
 capture confirm variable gk_ok_total
 if _rc==0 {
@@ -180,7 +171,7 @@ if _rc==0 {
     eststo m_diffimpact_perf
 }
 
-* 6.2) Autorreporte (encuesta) como covariables
+* Encuesta como covariables
 capture confirm variable preg_optimismo
 capture confirm variable preg_confianza
 if _rc==0 {
@@ -188,9 +179,8 @@ if _rc==0 {
     eststo m_diffimpact_enc
 }
 
-*******************************************************
-* 7) Exportar tablas
-*******************************************************
+* Exportar
+
 capture which esttab
 if _rc ssc install estout, replace
 
@@ -208,13 +198,13 @@ capture confirm estimation m_diffimpact_enc
 if _rc==0 esttab m_diffimpact_enc using "robustez_encuesta.rtf", replace ///
     title("Robustez con encuesta (autorreporte)") b(%9.3f) se(%9.3f) star(* 0.10 ** 0.05 *** 0.01)
 
-* Guardar base analítica
+* Guardar base
 save "resultados_analiticos_shifts.dta", replace
 
-*******************************************************
-* 8) Notas
+
+* Notas
 * - shift_B ≈ ε_D (optimismo), shift_C ≈ ε_P (exceso), shift_D ≈ ε_D + ε_P.
 * - Prueba clave: en m_diffimpact, comparar 1.treat#c.shift_B vs 1.treat#c.shift_C.
 *   Si son iguales (test no rechaza), el feedback afecta “por igual”.
 *   Si difieren, identifica cuál sesgo se corrige más con el tratamiento.
-*******************************************************
+
