@@ -258,6 +258,16 @@ class ModelResult:
     model: object
 
 
+def sanitize_for_model(df: pd.DataFrame) -> pd.DataFrame:
+    """Convert nullable integer dtypes to plain floats before modelling."""
+    cleaned = df.copy()
+    for col in cleaned.columns:
+        dtype = cleaned[col].dtype
+        if pd.api.types.is_integer_dtype(dtype) and not pd.api.types.is_bool_dtype(dtype):
+            cleaned[col] = cleaned[col].astype("float64")
+    return cleaned
+
+
 def fit_model(formula: str, df: pd.DataFrame, name: str) -> Optional[ModelResult]:
     try:
         model = smf.ols(formula=formula, data=df).fit(cov_type="HC1")
@@ -269,17 +279,19 @@ def fit_model(formula: str, df: pd.DataFrame, name: str) -> Optional[ModelResult
 
 
 def run_regressions(df: pd.DataFrame, output_dir: Path) -> None:
+    model_df = sanitize_for_model(df)
+
     models: List[ModelResult] = []
-    models.append(fit_model("shift_D ~ C(treat) + shift_B + shift_C + edad + C(mujer)", df, "ANCOVA D-A"))
-    models.append(fit_model("shift_D ~ shift_B*C(treat) + shift_C*C(treat) + edad + C(mujer)", df, "Diferencial"))
-    models.append(fit_model("optim_post ~ C(treat) + optim_pre + edad + C(mujer)", df, "ANCOVA niveles"))
-    models.append(fit_model("d_optim ~ C(treat) + edad + C(mujer)", df, "DiD niveles"))
+    models.append(fit_model("shift_D ~ C(treat) + shift_B + shift_C + edad + C(mujer)", model_df, "ANCOVA D-A"))
+    models.append(fit_model("shift_D ~ shift_B*C(treat) + shift_C*C(treat) + edad + C(mujer)", model_df, "Diferencial"))
+    models.append(fit_model("optim_post ~ C(treat) + optim_pre + edad + C(mujer)", model_df, "ANCOVA niveles"))
+    models.append(fit_model("d_optim ~ C(treat) + edad + C(mujer)", model_df, "DiD niveles"))
 
     optional_models: List[ModelResult] = []
-    if df["gk_ok_total"].notna().any():
-        optional_models.append(fit_model("shift_D ~ shift_B*C(treat) + shift_C*C(treat) + gk_ok_total + edad + C(mujer)", df, "Diferencial + desempeño"))
-    if df[["preg_optimismo", "preg_confianza"]].notna().any().any():
-        optional_models.append(fit_model("shift_D ~ shift_B*C(treat) + shift_C*C(treat) + preg_optimismo + preg_confianza + edad + C(mujer)", df, "Diferencial + encuesta"))
+    if model_df["gk_ok_total"].notna().any():
+        optional_models.append(fit_model("shift_D ~ shift_B*C(treat) + shift_C*C(treat) + gk_ok_total + edad + C(mujer)", model_df, "Diferencial + desempeño"))
+    if model_df[["preg_optimismo", "preg_confianza"]].notna().any().any():
+        optional_models.append(fit_model("shift_D ~ shift_B*C(treat) + shift_C*C(treat) + preg_optimismo + preg_confianza + edad + C(mujer)", model_df, "Diferencial + encuesta"))
 
     models = [m for m in models if m is not None]
     if models:
