@@ -106,23 +106,22 @@ def load_excel() -> pd.DataFrame:
     return df_raw, chosen.name, sheet
 
 # ---------- Modelos ----------
+def _ensure_numpy_float(series: pd.Series) -> pd.Series:
+    """Return a Series backed by a NumPy float64 dtype (no pandas extension dtypes)."""
+
+    as_numeric = pd.to_numeric(series, errors="coerce")
+    # The astype call can still yield pandas' nullable Float64Dtype when NA is present.
+    # Forcing through NumPy guarantees patsy/statsmodels receive native dtypes.
+    return pd.Series(np.asarray(as_numeric, dtype="float64"), index=series.index)
+
+
 def sanitize_for_model(df: pd.DataFrame) -> pd.DataFrame:
-    """Coerce nullable integers to vanilla float dtypes before modeling."""
+    """Coerce nullable integers to NumPy float64 columns before modeling."""
 
     sanitized = df.copy()
-    numeric_cols = ["grupo_num", "tratamiento", "nitems_row", "aciertos_total"]
-    for column in numeric_cols:
+    for column in ["grupo_num", "tratamiento", "nitems_row", "aciertos_total"]:
         if column in sanitized.columns:
-            sanitized[column] = pd.to_numeric(sanitized[column], errors="coerce")
-
-    if "grupo_num" in sanitized.columns:
-        sanitized["grupo_num"] = sanitized["grupo_num"].astype("float64")
-    if "tratamiento" in sanitized.columns:
-        sanitized["tratamiento"] = sanitized["tratamiento"].astype("float64")
-    if "nitems_row" in sanitized.columns:
-        sanitized["nitems_row"] = sanitized["nitems_row"].astype("float64")
-    if "aciertos_total" in sanitized.columns:
-        sanitized["aciertos_total"] = sanitized["aciertos_total"].astype("float64")
+            sanitized[column] = _ensure_numpy_float(sanitized[column])
 
     return sanitized
 
