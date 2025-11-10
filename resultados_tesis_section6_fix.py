@@ -214,7 +214,7 @@ def run_models(valid: pd.DataFrame):
         pass
 
     # Predicciones por grupo
-    grupos = np.sort(model_df["grupo_num"].unique())
+    grupos = np.sort(model_df["grupo_num"].dropna().to_numpy(dtype="float64"))
     grid = pd.DataFrame({"grupo_num": grupos})
     po = ols.get_prediction(grid)
     pred_ols = pd.DataFrame({
