@@ -301,7 +301,12 @@ with tab_export:
             ws["A1"].font = Font(size=14, bold=True, color="1F4E79")
             ws.merge_cells("A1:AI1")
 
-            header_row = 3
+            # Leyenda de simbología en el propio Excel
+            ws["A2"] = "Leyenda: ✓ cumplido | ✗ incumplido/vencido | + pendiente"
+            ws["A2"].font = Font(size=11, color="1F4E79")
+            ws.merge_cells("A2:AI2")
+
+            header_row = 4
             headers = ["Especialista", "Actividad", "Unidad de medida"]
             max_day = month_last.day
 
@@ -327,15 +332,15 @@ with tab_export:
                 ws.column_dimensions[get_column_letter(3 + d)].width = 4.2
 
             start_row = header_row + 1
-            for i, row in enumerate(pivot.itertuples(index=False), start=start_row):
-                ws.cell(i, 1, row.specialist).alignment = left
-                ws.cell(i, 2, row.activity).alignment = left
-                ws.cell(i, 3, row.unit).alignment = center
+            for i, (_, row) in enumerate(pivot.iterrows(), start=start_row):
+                ws.cell(i, 1, row["specialist"]).alignment = left
+                ws.cell(i, 2, row["activity"]).alignment = left
+                ws.cell(i, 3, row["unit"]).alignment = center
                 for c in range(1, 3 + max_day + 1):
                     ws.cell(i, c).border = border_thin
 
                 for d in range(1, max_day + 1):
-                    val = getattr(row, str(d), "")
+                    val = row[d] if d in row.index else ""
                     ws.cell(i, 3 + d, val).alignment = center
 
             bio = BytesIO()
