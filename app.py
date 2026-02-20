@@ -1,8 +1,12 @@
 import os
 from datetime import date, datetime, timedelta
+from io import BytesIO
 
 import pandas as pd
 import streamlit as st
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 
 from db import (
     init_db,
@@ -11,7 +15,6 @@ from db import (
     update_records_status_and_notes,
     admin_update_scheduled_date,
     admin_delete_record,
-    export_month_matrix_xlsx_bytes,
 )
 
 st.set_page_config(page_title="Registro de Actividades", layout="wide")
@@ -247,10 +250,98 @@ with tab_tablero:
 # --- Exportar ---
 with tab_export:
     st.subheader("Exportar matriz mensual a Excel")
-    st.caption("Genera una matriz tipo Excel (días del mes como columnas) a partir de lo registrado en la app.")
+    st.caption("Genera una matriz tipo Excel (días del mes como columnas) con símbolos: ✓ cumplido, ✗ fuera de plazo y + pendiente.")
     exp_especialista = st.text_input("Filtrar por especialista (opcional)", value="")
     if st.button("Generar Excel"):
-        bytes_xlsx = export_month_matrix_xlsx_bytes(month_first, month_last, specialist=(exp_especialista.strip() or None))
+        df_export = get_month_records(month_first, month_last, specialist=(exp_especialista.strip() or None))
+
+        if df_export.empty:
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Matriz"
+            ws["A1"] = "Sin datos para el rango seleccionado"
+            bio = BytesIO()
+            wb.save(bio)
+            bytes_xlsx = bio.getvalue()
+        else:
+            # Símbolos para exportación:
+            # ✓ = cumplido, ✗ = incumplido (incluye vencidos sin marcar), + = pendiente
+            today_ref = date.today()
+
+            def excel_symbol(row) -> str:
+                if row["status"] == "✓":
+                    return "✓"
+                if row["status"] == "✗" or row["scheduled_date"] < today_ref:
+                    return "✗"
+                return "+"
+
+            df_export["symbol"] = df_export.apply(excel_symbol, axis=1)
+            df_export["day"] = pd.to_datetime(df_export["scheduled_date"]).dt.day
+            pivot = df_export.pivot_table(
+                index=["specialist", "activity", "unit"],
+                columns="day",
+                values="symbol",
+                aggfunc="first",
+                fill_value="",
+            ).reset_index()
+
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Matriz"
+            ws.sheet_view.showGridLines = False
+
+            header_fill = PatternFill("solid", fgColor="1F4E79")
+            header_font = Font(color="FFFFFF", bold=True)
+            thin = Side(style="thin", color="9E9E9E")
+            border_thin = Border(left=thin, right=thin, top=thin, bottom=thin)
+            center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+            ws["A1"] = f"Matriz mensual: {month_first.strftime('%Y-%m')}"
+            ws["A1"].font = Font(size=14, bold=True, color="1F4E79")
+            ws.merge_cells("A1:AI1")
+
+            header_row = 3
+            headers = ["Especialista", "Actividad", "Unidad de medida"]
+            max_day = month_last.day
+
+            for j, h in enumerate(headers, start=1):
+                c = ws.cell(row=header_row, column=j, value=h)
+                c.fill = header_fill
+                c.font = header_font
+                c.alignment = center
+                c.border = border_thin
+
+            for d in range(1, max_day + 1):
+                col = 3 + d
+                c = ws.cell(row=header_row, column=col, value=d)
+                c.fill = header_fill
+                c.font = header_font
+                c.alignment = center
+                c.border = border_thin
+
+            ws.column_dimensions["A"].width = 24
+            ws.column_dimensions["B"].width = 38
+            ws.column_dimensions["C"].width = 18
+            for d in range(1, max_day + 1):
+                ws.column_dimensions[get_column_letter(3 + d)].width = 4.2
+
+            start_row = header_row + 1
+            for i, row in enumerate(pivot.itertuples(index=False), start=start_row):
+                ws.cell(i, 1, row.specialist).alignment = left
+                ws.cell(i, 2, row.activity).alignment = left
+                ws.cell(i, 3, row.unit).alignment = center
+                for c in range(1, 3 + max_day + 1):
+                    ws.cell(i, c).border = border_thin
+
+                for d in range(1, max_day + 1):
+                    val = getattr(row, str(d), "")
+                    ws.cell(i, 3 + d, val).alignment = center
+
+            bio = BytesIO()
+            wb.save(bio)
+            bytes_xlsx = bio.getvalue()
+
         filename = f"matriz_{month_first.strftime('%Y_%m')}.xlsx"
         st.download_button(
             label="Descargar Excel",
