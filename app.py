@@ -116,9 +116,10 @@ with tab_reg:
                 cur = f_ini
                 map_wd = {0: "Lun", 1: "Mar", 2: "Mié", 3: "Jue", 4: "Vie", 5: "Sáb", 6: "Dom"}
                 allowed = set(dias) if dias else set(map_wd.values())
+                weekend_selected = bool(allowed.intersection({"Sáb", "Dom"}))
                 while cur <= f_fin:
                     wd = map_wd[cur.weekday()]
-                    if (incluir_finde or wd not in {"Sáb", "Dom"}) and wd in allowed:
+                    if wd in allowed and (incluir_finde or wd not in {"Sáb", "Dom"} or weekend_selected):
                         fechas.append(cur)
                     cur += timedelta(days=1)
 
@@ -126,7 +127,9 @@ with tab_reg:
         submitted = st.form_submit_button("Registrar")
 
     if submitted:
-        if not (especialista and actividad and (unidad or unidad_otro) and fechas):
+        if mode == "Rango" and len(fechas) == 0:
+            st.error("No hay fechas válidas en el rango. Revisa inicio/fin y los días seleccionados.")
+        elif not (especialista and actividad and (unidad or unidad_otro) and fechas):
             st.error("Faltan datos: especialista, actividad, unidad y al menos 1 fecha.")
         else:
             unidad_final = unidad_otro.strip() if unidad == "Otro" else unidad
