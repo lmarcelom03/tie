@@ -110,6 +110,67 @@ def update_records_status_and_notes(changes: list[dict[str, Any]]) -> None:
             ))
         conn.commit()
 
+
+
+def upsert_records_from_excel(records: list[dict[str, Any]], actor: str) -> tuple[int, int, list[str]]:
+    inserted = 0
+    updated = 0
+    errors: list[str] = []
+    if not records:
+        return inserted, updated, errors
+
+    with get_conn() as conn:
+        for idx, r in enumerate(records, start=1):
+            try:
+                specialist = (r.get("specialist") or "").strip()
+                activity = (r.get("activity") or "").strip()
+                unit = (r.get("unit") or "").strip()
+                scheduled_date = (r.get("scheduled_date") or "").strip()
+                status = (r.get("status") or "").strip()
+                notes = (r.get("notes") or "").strip()
+                record_id = r.get("id")
+
+                if not (specialist and activity and unit and scheduled_date):
+                    errors.append(f"Fila {idx}: faltan columnas obligatorias (specialist, activity, unit, scheduled_date).")
+                    continue
+                if status not in {"", "✓", "✗"}:
+                    errors.append(f"Fila {idx}: status inválido '{status}'. Usa '', '✓' o '✗'.")
+                    continue
+                try:
+                    date.fromisoformat(scheduled_date)
+                except ValueError:
+                    errors.append(f"Fila {idx}: scheduled_date inválida '{scheduled_date}'. Usa YYYY-MM-DD.")
+                    continue
+
+                if record_id is not None and str(record_id).strip() != "":
+                    rec_id = int(record_id)
+                    exists = conn.execute("SELECT id FROM scheduled_activities WHERE id = ?", (rec_id,)).fetchone()
+                    if exists:
+                        conn.execute(
+                            """
+                            UPDATE scheduled_activities
+                            SET specialist = ?, activity = ?, unit = ?, scheduled_date = ?, status = ?, notes = ?, updated_at = ?, updated_by = ?
+                            WHERE id = ?
+                            """,
+                            (specialist, activity, unit, scheduled_date, status, notes, _now_iso(), actor, rec_id),
+                        )
+                        updated += 1
+                        continue
+
+                conn.execute(
+                    """
+                    INSERT INTO scheduled_activities
+                    (specialist, activity, unit, scheduled_date, status, notes, created_at, created_by, updated_at, updated_by)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (specialist, activity, unit, scheduled_date, status, notes, _now_iso(), actor, _now_iso(), actor),
+                )
+                inserted += 1
+            except Exception as e:
+                errors.append(f"Fila {idx}: error inesperado ({e}).")
+        conn.commit()
+
+    return inserted, updated, errors
 def admin_update_scheduled_date(record_id: int, new_date: str, actor: str, reason: str) -> bool:
     with get_conn() as conn:
         row = conn.execute("SELECT scheduled_date FROM scheduled_activities WHERE id = ?", (record_id,)).fetchone()
