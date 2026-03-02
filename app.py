@@ -82,8 +82,8 @@ month_first, month_last = month_bounds(selected_month)
 st.title("📋 Registro de Actividades")
 st.caption("Registra actividades por día y marca el resultado: ✓ cumplido / ✗ incumplido.")
 
-tab_reg, tab_estado, tab_tablero, tab_export, tab_admin = st.tabs(
-    ["➕ Registrar", "✅/✗ Marcar estado", "📊 Tablero", "⬇️ Exportar", "🛡️ Admin"]
+tab_reg, tab_estado, tab_tablero, tab_cal, tab_export, tab_admin = st.tabs(
+    ["➕ Registrar", "✅/✗ Marcar estado", "📊 Tablero", "🗓️ Carga diaria", "⬇️ Exportar", "🛡️ Admin"]
 )
 
 # --- Registrar ---
@@ -297,6 +297,36 @@ with tab_tablero:
             chart_df = resumen.set_index("specialist")[["completed", "missed"]]
             st.bar_chart(chart_df)
 
+# --- Carga diaria / calendario ---
+with tab_cal:
+    st.subheader("Carga diaria de actividades por especialista")
+    st.caption("Vista tipo calendario para revisar cuántas actividades tiene cada especialista en cada día del mes.")
+    dfc = get_month_records(month_first, month_last, specialist=None)
+    if dfc.empty:
+        st.info("Aún no hay actividades registradas en el mes seleccionado.")
+    else:
+        dfc["day"] = pd.to_datetime(dfc["scheduled_date"]).dt.day
+        matriz_carga = (
+            dfc.assign(carga=1)
+            .pivot_table(index="specialist", columns="day", values="carga", aggfunc="sum", fill_value=0)
+            .reindex(columns=list(range(1, month_last.day + 1)), fill_value=0)
+            .reset_index()
+        )
+        matriz_carga["Total mes"] = matriz_carga.drop(columns=["specialist"]).sum(axis=1)
+        st.dataframe(matriz_carga, use_container_width=True, hide_index=True)
+
+        especialista_sel = st.selectbox("Ver detalle por especialista", sorted(dfc["specialist"].dropna().unique()))
+        df_esp = dfc[dfc["specialist"] == especialista_sel].copy()
+        if not df_esp.empty:
+            resumen_dia = (
+                df_esp.groupby("scheduled_date", as_index=False)
+                .agg(actividades=("id", "count"))
+                .sort_values("scheduled_date")
+            )
+            st.caption(f"Detalle diario de {especialista_sel}")
+            st.bar_chart(resumen_dia.set_index("scheduled_date")["actividades"])
+
+
 # --- Exportar ---
 with tab_export:
     st.subheader("Exportar matriz mensual a Excel")
@@ -308,12 +338,12 @@ with tab_export:
     plantilla_df = pd.DataFrame([
         {
             "id": "",
-            "specialist": "",
-            "activity": "",
-            "unit": "",
-            "scheduled_date": "YYYY-MM-DD",
-            "status": "",
-            "notes": "",
+            "especialista": "",
+            "actividad": "",
+            "unidad": "",
+            "fecha_programada": "YYYY-MM-DD",
+            "estado": "",
+            "notas": "",
         }
     ])
     template_bio = BytesIO()
@@ -329,16 +359,27 @@ with tab_export:
     archivo_subido = st.file_uploader(
         "Subir Excel para actualización automática",
         type=["xlsx"],
-        help="Columnas obligatorias: specialist, activity, unit, scheduled_date. Opcionales: id, status, notes.",
+        help="Columnas obligatorias: especialista, actividad, unidad, fecha_programada. Opcionales: id, estado, notas.",
     )
 
     if archivo_subido is not None:
         try:
             df_in = pd.read_excel(archivo_subido)
             df_in.columns = [str(c).strip().lower() for c in df_in.columns]
+
+            rename_map = {
+                "especialista": "specialist",
+                "actividad": "activity",
+                "unidad": "unit",
+                "fecha_programada": "scheduled_date",
+                "estado": "status",
+                "notas": "notes",
+            }
+            df_in = df_in.rename(columns=rename_map)
+
             req = {"specialist", "activity", "unit", "scheduled_date"}
             if not req.issubset(set(df_in.columns)):
-                st.error("El archivo no tiene las columnas mínimas requeridas: specialist, activity, unit, scheduled_date.")
+                st.error("El archivo no tiene las columnas mínimas requeridas: especialista, actividad, unidad, fecha_programada.")
             else:
                 # Normalización básica
                 for col in ["id", "status", "notes"]:
@@ -349,6 +390,18 @@ with tab_export:
                     df_in["scheduled_date"] = df_in["scheduled_date"].dt.date.astype(str)
                 else:
                     df_in["scheduled_date"] = df_in["scheduled_date"].astype(str).str.strip()
+
+                df_in["status"] = (
+                    df_in["status"].astype(str).str.strip().replace({
+                        "Cumplido": "✓",
+                        "cumplido": "✓",
+                        "Incumplido": "✗",
+                        "incumplido": "✗",
+                        "Pendiente": "",
+                        "pendiente": "",
+                        "nan": "",
+                    })
+                )
 
                 records = df_in[["id", "specialist", "activity", "unit", "scheduled_date", "status", "notes"]].fillna("").to_dict("records")
 
