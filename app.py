@@ -30,6 +30,18 @@ def month_bounds(any_day: date):
     last = next_first - timedelta(days=1)
     return first, last
 
+def add_months(base: date, months: int) -> date:
+    total = (base.month - 1) + months
+    year = base.year + (total // 12)
+    month = (total % 12) + 1
+    first_of_month = date(year, month, 1)
+    if month == 12:
+        next_first = date(year + 1, 1, 1)
+    else:
+        next_first = date(year, month + 1, 1)
+    last_day = (next_first - timedelta(days=1)).day
+    return first_of_month.replace(day=min(base.day, last_day))
+
 def get_admin_code() -> str | None:
     # Prefer Streamlit secrets, fallback to env var
     try:
@@ -92,6 +104,16 @@ with tab_reg:
         st.markdown("**Programación**")
         mode = st.radio("Tipo", ["Fecha única", "Rango"], horizontal=True)
 
+        es_rutinaria = st.checkbox("Actividad rutinaria (se repite)", value=False)
+        frecuencia = None
+        repetir_hasta = None
+        if es_rutinaria:
+            cfr1, cfr2 = st.columns([2, 2])
+            with cfr1:
+                frecuencia = st.selectbox("Frecuencia", ["Diaria", "Semanal", "Mensual", "Trimestral", "Semestral"])
+            with cfr2:
+                repetir_hasta = st.date_input("Repetir hasta", value=month_last)
+
         if mode == "Fecha única":
             fecha = st.date_input("Fecha programada", value=today)
             fechas = [fecha]
@@ -127,6 +149,30 @@ with tab_reg:
         submitted = st.form_submit_button("Registrar")
 
     if submitted:
+        if es_rutinaria and fechas:
+            inicio = min(fechas)
+            if repetir_hasta is None or repetir_hasta < inicio:
+                st.error("La fecha 'Repetir hasta' debe ser mayor o igual a la fecha de inicio.")
+                fechas = []
+            else:
+                fechas_rep = []
+                cur = inicio
+                while cur <= repetir_hasta:
+                    fechas_rep.append(cur)
+                    if frecuencia == "Diaria":
+                        cur += timedelta(days=1)
+                    elif frecuencia == "Semanal":
+                        cur += timedelta(days=7)
+                    elif frecuencia == "Mensual":
+                        cur = add_months(cur, 1)
+                    elif frecuencia == "Trimestral":
+                        cur = add_months(cur, 3)
+                    elif frecuencia == "Semestral":
+                        cur = add_months(cur, 6)
+                    else:
+                        break
+                fechas = sorted(set(fechas_rep))
+
         if mode == "Rango" and len(fechas) == 0:
             st.error("No hay fechas válidas en el rango. Revisa inicio/fin y los días seleccionados.")
         elif not (especialista and actividad and (unidad or unidad_otro) and fechas):
