@@ -15,6 +15,7 @@ from db import (
     update_records_status_and_notes,
     admin_update_scheduled_date,
     admin_delete_record,
+    upsert_records_from_excel,
 )
 
 st.set_page_config(page_title="Registro de Actividades", layout="wide")
@@ -29,6 +30,18 @@ def month_bounds(any_day: date):
         next_first = date(first.year, first.month + 1, 1)
     last = next_first - timedelta(days=1)
     return first, last
+
+def add_months(base: date, months: int) -> date:
+    total = (base.month - 1) + months
+    year = base.year + (total // 12)
+    month = (total % 12) + 1
+    first_of_month = date(year, month, 1)
+    if month == 12:
+        next_first = date(year + 1, 1, 1)
+    else:
+        next_first = date(year, month + 1, 1)
+    last_day = (next_first - timedelta(days=1)).day
+    return first_of_month.replace(day=min(base.day, last_day))
 
 def get_admin_code() -> str | None:
     # Prefer Streamlit secrets, fallback to env var
@@ -92,6 +105,16 @@ with tab_reg:
         st.markdown("**Programación**")
         mode = st.radio("Tipo", ["Fecha única", "Rango"], horizontal=True)
 
+        es_rutinaria = st.checkbox("Actividad rutinaria (se repite)", value=False)
+        frecuencia = None
+        repetir_hasta = None
+        if es_rutinaria:
+            cfr1, cfr2 = st.columns([2, 2])
+            with cfr1:
+                frecuencia = st.selectbox("Frecuencia", ["Diaria", "Semanal", "Mensual", "Trimestral", "Semestral"])
+            with cfr2:
+                repetir_hasta = st.date_input("Repetir hasta", value=month_last)
+
         if mode == "Fecha única":
             fecha = st.date_input("Fecha programada", value=today)
             fechas = [fecha]
@@ -127,6 +150,30 @@ with tab_reg:
         submitted = st.form_submit_button("Registrar")
 
     if submitted:
+        if es_rutinaria and fechas:
+            inicio = min(fechas)
+            if repetir_hasta is None or repetir_hasta < inicio:
+                st.error("La fecha 'Repetir hasta' debe ser mayor o igual a la fecha de inicio.")
+                fechas = []
+            else:
+                fechas_rep = []
+                cur = inicio
+                while cur <= repetir_hasta:
+                    fechas_rep.append(cur)
+                    if frecuencia == "Diaria":
+                        cur += timedelta(days=1)
+                    elif frecuencia == "Semanal":
+                        cur += timedelta(days=7)
+                    elif frecuencia == "Mensual":
+                        cur = add_months(cur, 1)
+                    elif frecuencia == "Trimestral":
+                        cur = add_months(cur, 3)
+                    elif frecuencia == "Semestral":
+                        cur = add_months(cur, 6)
+                    else:
+                        break
+                fechas = sorted(set(fechas_rep))
+
         if mode == "Rango" and len(fechas) == 0:
             st.error("No hay fechas válidas en el rango. Revisa inicio/fin y los días seleccionados.")
         elif not (especialista and actividad and (unidad or unidad_otro) and fechas):
@@ -254,6 +301,70 @@ with tab_tablero:
 with tab_export:
     st.subheader("Exportar matriz mensual a Excel")
     st.caption("Genera una matriz tipo Excel (días del mes como columnas) con símbolos: ✓ cumplido, ✗ fuera de plazo y + pendiente.")
+
+    st.markdown("### Plantilla de carga masiva")
+    st.caption("Descarga esta plantilla, llénala y súbela para actualizar automáticamente registros.")
+
+    plantilla_df = pd.DataFrame([
+        {
+            "id": "",
+            "specialist": "",
+            "activity": "",
+            "unit": "",
+            "scheduled_date": "YYYY-MM-DD",
+            "status": "",
+            "notes": "",
+        }
+    ])
+    template_bio = BytesIO()
+    with pd.ExcelWriter(template_bio, engine="openpyxl") as writer:
+        plantilla_df.to_excel(writer, sheet_name="plantilla", index=False)
+    st.download_button(
+        label="Descargar plantilla para importar",
+        data=template_bio.getvalue(),
+        file_name="plantilla_carga_actividades.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+    archivo_subido = st.file_uploader(
+        "Subir Excel para actualización automática",
+        type=["xlsx"],
+        help="Columnas obligatorias: specialist, activity, unit, scheduled_date. Opcionales: id, status, notes.",
+    )
+
+    if archivo_subido is not None:
+        try:
+            df_in = pd.read_excel(archivo_subido)
+            df_in.columns = [str(c).strip().lower() for c in df_in.columns]
+            req = {"specialist", "activity", "unit", "scheduled_date"}
+            if not req.issubset(set(df_in.columns)):
+                st.error("El archivo no tiene las columnas mínimas requeridas: specialist, activity, unit, scheduled_date.")
+            else:
+                # Normalización básica
+                for col in ["id", "status", "notes"]:
+                    if col not in df_in.columns:
+                        df_in[col] = ""
+
+                if pd.api.types.is_datetime64_any_dtype(df_in["scheduled_date"]):
+                    df_in["scheduled_date"] = df_in["scheduled_date"].dt.date.astype(str)
+                else:
+                    df_in["scheduled_date"] = df_in["scheduled_date"].astype(str).str.strip()
+
+                records = df_in[["id", "specialist", "activity", "unit", "scheduled_date", "status", "notes"]].fillna("").to_dict("records")
+
+                if st.button("Procesar importación"):
+                    actor = (actor_name or "IMPORTADOR").strip()
+                    inserted, updated, errors = upsert_records_from_excel(records, actor)
+                    st.success(f"Importación completada. Insertados: {inserted} | Actualizados: {updated}")
+                    if errors:
+                        st.warning("Se detectaron filas con error:")
+                        for err in errors[:30]:
+                            st.write(f"- {err}")
+        except Exception as e:
+            st.error(f"No se pudo leer el archivo Excel: {e}")
+
+    st.divider()
+    st.markdown("### Exportar matriz")
     exp_especialista = st.text_input("Filtrar por especialista (opcional)", value="")
     if st.button("Generar Excel"):
         df_export = get_month_records(month_first, month_last, specialist=(exp_especialista.strip() or None))
