@@ -69,6 +69,8 @@ if role == "Administrador":
 else:
     is_admin = False
 
+admin_mode = role == "Administrador" and is_admin
+
 if actor_name:
     st.session_state["actor_name"] = actor_name.strip()
 else:
@@ -92,7 +94,7 @@ with tab_reg:
     with st.form("form_registro", clear_on_submit=True):
         col1, col2, col3 = st.columns([2, 3, 2])
         with col1:
-            if role == "Especialista":
+            if not admin_mode:
                 especialista = st.text_input("Especialista", value=actor_name, placeholder="Nombre completo", disabled=True)
             else:
                 especialista = st.text_input("Especialista", value=actor_name, placeholder="Nombre completo")
@@ -204,7 +206,7 @@ with tab_estado:
     if not actor_name:
         st.info("Escribe tu nombre en la barra lateral para continuar.")
     else:
-        if role == "Especialista":
+        if not admin_mode:
             rango_ini = today
             rango_fin = today
             df = get_month_records(rango_ini, rango_fin, specialist=actor_name.strip())
@@ -274,10 +276,10 @@ with tab_estado:
 # --- Calendario / recordatorios ---
 with tab_cal:
     st.subheader("Calendario de actividades y recordatorios")
-    if not actor_name and role == "Especialista":
+    if not actor_name and not admin_mode:
         st.info("Escribe tu nombre para visualizar tu calendario.")
     else:
-        specialist_scope = actor_name.strip() if role == "Especialista" else None
+        specialist_scope = actor_name.strip() if not admin_mode else None
         dfc = get_month_records(month_first, month_last, specialist=specialist_scope)
 
         if dfc.empty:
@@ -286,7 +288,7 @@ with tab_cal:
             dfc["scheduled_date"] = pd.to_datetime(dfc["scheduled_date"]).dt.date
             dfc["day"] = pd.to_datetime(dfc["scheduled_date"]).dt.day
 
-            if role == "Especialista":
+            if not admin_mode:
                 st.caption("Solo ves tus actividades del mes seleccionado.")
                 matriz = (
                     dfc.assign(carga=1)
@@ -404,7 +406,7 @@ with tab_export:
 
     st.divider()
     st.markdown("### Exportar matriz")
-    if role == "Especialista":
+    if not admin_mode:
         exp_especialista = actor_name.strip()
         st.caption(f"Exportación limitada a tus registros: {exp_especialista}")
     else:
