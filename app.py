@@ -31,6 +31,11 @@ def month_bounds(any_day: date):
     last = next_first - timedelta(days=1)
     return first, last
 
+def week_bounds(any_day: date):
+    first = any_day - timedelta(days=any_day.weekday())
+    last = first + timedelta(days=6)
+    return first, last
+
 def add_months(base: date, months: int) -> date:
     total = (base.month - 1) + months
     year = base.year + (total // 12)
@@ -406,6 +411,15 @@ with tab_export:
 
     st.divider()
     st.markdown("### Exportar matriz")
+    periodo_export = st.radio("Periodo de exportación", ["Semanal", "Mensual"], horizontal=True)
+
+    if periodo_export == "Semanal":
+        exp_from, exp_to = week_bounds(selected_month)
+        st.caption(f"Rango semanal: {exp_from.isoformat()} a {exp_to.isoformat()}")
+    else:
+        exp_from, exp_to = month_bounds(selected_month)
+        st.caption(f"Rango mensual: {exp_from.isoformat()} a {exp_to.isoformat()}")
+
     if not admin_mode:
         exp_especialista = actor_name.strip()
         st.caption(f"Exportación limitada a tus registros: {exp_especialista}")
@@ -413,7 +427,7 @@ with tab_export:
         exp_especialista = st.text_input("Filtrar por especialista (opcional)", value="")
 
     if st.button("Generar Excel"):
-        df_export = get_month_records(month_first, month_last, specialist=(exp_especialista.strip() or None))
+        df_export = get_month_records(exp_from, exp_to, specialist=(exp_especialista.strip() or None))
 
         if df_export.empty:
             wb = Workbook()
@@ -436,14 +450,15 @@ with tab_export:
                 return "+"
 
             df_export["symbol"] = df_export.apply(excel_symbol, axis=1)
-            df_export["day"] = pd.to_datetime(df_export["scheduled_date"]).dt.day
+            df_export["scheduled_date"] = pd.to_datetime(df_export["scheduled_date"]).dt.date
+            days = pd.date_range(exp_from, exp_to, freq="D").date
             pivot = df_export.pivot_table(
                 index=["specialist", "activity", "unit"],
-                columns="day",
+                columns="scheduled_date",
                 values="symbol",
                 aggfunc="first",
                 fill_value="",
-            ).reset_index()
+            ).reindex(columns=list(days), fill_value="").reset_index()
 
             wb = Workbook()
             ws = wb.active
@@ -457,18 +472,16 @@ with tab_export:
             center = Alignment(horizontal="center", vertical="center", wrap_text=True)
             left = Alignment(horizontal="left", vertical="center", wrap_text=True)
 
-            ws["A1"] = f"Matriz mensual: {month_first.strftime('%Y-%m')}"
+            ws["A1"] = f"Matriz {periodo_export.lower()}: {exp_from.isoformat()} a {exp_to.isoformat()}"
             ws["A1"].font = Font(size=14, bold=True, color="1F4E79")
             ws.merge_cells("A1:AI1")
 
-            # Leyenda de simbología en el propio Excel
             ws["A2"] = "Leyenda: ✓ cumplido | ✗ incumplido/vencido | + pendiente"
             ws["A2"].font = Font(size=11, color="1F4E79")
             ws.merge_cells("A2:AI2")
 
             header_row = 4
             headers = ["Especialista", "Actividad", "Unidad de medida"]
-            max_day = month_last.day
 
             for j, h in enumerate(headers, start=1):
                 c = ws.cell(row=header_row, column=j, value=h)
@@ -477,9 +490,9 @@ with tab_export:
                 c.alignment = center
                 c.border = border_thin
 
-            for d in range(1, max_day + 1):
-                col = 3 + d
-                c = ws.cell(row=header_row, column=col, value=d)
+            for i_day, day in enumerate(days, start=1):
+                col = 3 + i_day
+                c = ws.cell(row=header_row, column=col, value=day.strftime("%d/%m"))
                 c.fill = header_fill
                 c.font = header_font
                 c.alignment = center
@@ -488,26 +501,29 @@ with tab_export:
             ws.column_dimensions["A"].width = 24
             ws.column_dimensions["B"].width = 38
             ws.column_dimensions["C"].width = 18
-            for d in range(1, max_day + 1):
-                ws.column_dimensions[get_column_letter(3 + d)].width = 4.2
+            for i_day, _ in enumerate(days, start=1):
+                ws.column_dimensions[get_column_letter(3 + i_day)].width = 6.5
 
             start_row = header_row + 1
             for i, (_, row) in enumerate(pivot.iterrows(), start=start_row):
                 ws.cell(i, 1, row["specialist"]).alignment = left
                 ws.cell(i, 2, row["activity"]).alignment = left
                 ws.cell(i, 3, row["unit"]).alignment = center
-                for c in range(1, 3 + max_day + 1):
+                for c in range(1, 3 + len(days) + 1):
                     ws.cell(i, c).border = border_thin
 
-                for d in range(1, max_day + 1):
-                    val = row[d] if d in row.index else ""
-                    ws.cell(i, 3 + d, val).alignment = center
+                for i_day, day in enumerate(days, start=1):
+                    val = row[day] if day in row.index else ""
+                    ws.cell(i, 3 + i_day, val).alignment = center
 
             bio = BytesIO()
             wb.save(bio)
             bytes_xlsx = bio.getvalue()
 
-        filename = f"matriz_{month_first.strftime('%Y_%m')}.xlsx"
+        if periodo_export == "Semanal":
+            filename = f"matriz_semanal_{exp_from.strftime('%Y_%m_%d')}_{exp_to.strftime('%Y_%m_%d')}.xlsx"
+        else:
+            filename = f"matriz_mensual_{exp_from.strftime('%Y_%m')}.xlsx"
         st.download_button(
             label="Descargar Excel",
             data=bytes_xlsx,
