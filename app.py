@@ -82,8 +82,8 @@ month_first, month_last = month_bounds(selected_month)
 st.title("📋 Registro de Actividades")
 st.caption("Registra actividades por día y marca el resultado: ✓ cumplido / ✗ incumplido.")
 
-tab_reg, tab_estado, tab_tablero, tab_cal, tab_export, tab_admin = st.tabs(
-    ["➕ Registrar", "✅/✗ Marcar estado", "📊 Tablero", "🗓️ Carga diaria", "⬇️ Exportar", "🛡️ Admin"]
+tab_reg, tab_estado, tab_cal, tab_export, tab_admin = st.tabs(
+    ["➕ Registrar", "✅/✗ Mis actividades", "🗓️ Calendario", "⬇️ Exportar", "🛡️ Admin"]
 )
 
 # --- Registrar ---
@@ -92,7 +92,10 @@ with tab_reg:
     with st.form("form_registro", clear_on_submit=True):
         col1, col2, col3 = st.columns([2, 3, 2])
         with col1:
-            especialista = st.text_input("Especialista", value=actor_name, placeholder="Nombre completo")
+            if role == "Especialista":
+                especialista = st.text_input("Especialista", value=actor_name, placeholder="Nombre completo", disabled=True)
+            else:
+                especialista = st.text_input("Especialista", value=actor_name, placeholder="Nombre completo")
         with col2:
             actividad = st.text_input("Actividad (tarea)", placeholder="Ej. Elaborar informe mensual")
         with col3:
@@ -195,28 +198,34 @@ with tab_reg:
             add_scheduled_records(records)
             st.success(f"Listo: se registraron {len(records)} actividad(es).")
 
-# --- Marcar estado ---
+# --- Mis actividades del día / Marcar estado ---
 with tab_estado:
-    st.subheader("Marcar estado (✓/✗) y notas")
+    st.subheader("Mis actividades del día")
     if not actor_name:
         st.info("Escribe tu nombre en la barra lateral para continuar.")
     else:
-        c1, c2, c3 = st.columns([2, 2, 2])
-        with c1:
-            filtro_especialista = st.text_input("Filtrar por especialista", value=actor_name if role == "Especialista" else "")
-        with c2:
-            rango_ini = st.date_input("Desde", value=month_first)
-        with c3:
-            rango_fin = st.date_input("Hasta", value=month_last)
+        if role == "Especialista":
+            rango_ini = today
+            rango_fin = today
+            df = get_month_records(rango_ini, rango_fin, specialist=actor_name.strip())
+            st.caption("Solo se muestran tus actividades programadas para hoy.")
+        else:
+            c1, c2, c3 = st.columns([2, 2, 2])
+            with c1:
+                filtro_especialista = st.text_input("Filtrar por especialista", value="")
+            with c2:
+                rango_ini = st.date_input("Desde", value=month_first)
+            with c3:
+                rango_fin = st.date_input("Hasta", value=month_last)
+            df = get_month_records(rango_ini, rango_fin, specialist=(filtro_especialista.strip() or None))
 
-        df = get_month_records(rango_ini, rango_fin, specialist=(filtro_especialista.strip() or None))
         if df.empty:
             st.warning("No hay registros en el rango seleccionado.")
         else:
             df = df.sort_values(["scheduled_date", "specialist", "activity"]).reset_index(drop=True)
             original = df.copy()
 
-            st.caption("Edita solo **Estado** y **Notas**. El plazo (fecha programada) solo lo puede cambiar el administrador.")
+            st.caption("Edita **Estado** y **Notas**. Solo administrador puede cambiar fecha programada.")
             edited = st.data_editor(
                 df,
                 hide_index=True,
@@ -236,12 +245,10 @@ with tab_estado:
             col_save, col_hint = st.columns([1, 3])
             with col_save:
                 if st.button("Guardar cambios"):
-                    # Determine changes
                     changes = []
                     for _, row in edited.iterrows():
                         rid = int(row["id"])
                         old = original.loc[original["id"] == rid].iloc[0]
-                        # Enforce: non-admin cannot change scheduled_date
                         if not is_admin and row["scheduled_date"] != old["scheduled_date"]:
                             st.error(f"No autorizado: el registro ID {rid} cambió fecha. Se ignorará ese cambio.")
                             row["scheduled_date"] = old["scheduled_date"]
@@ -262,70 +269,49 @@ with tab_estado:
                         st.success(f"Guardado: {len(changes)} cambio(s).")
                         st.rerun()
             with col_hint:
-                st.caption("Tip: deja **Estado** en blanco si no aplica / aún no se ejecuta.")
+                st.caption("Tip: deja Estado en blanco si aún no se ejecuta.")
 
-# --- Tablero ---
-with tab_tablero:
-    st.subheader("Tablero mensual (carga y cumplimiento)")
-    dfm = get_month_records(month_first, month_last, specialist=None)
-    if dfm.empty:
-        st.info("Aún no hay registros en el mes seleccionado.")
-    else:
-        dfm["status"] = dfm["status"].fillna("")
-        resumen = (
-            dfm.assign(
-                planned=1,
-                completed=(dfm["status"] == "✓").astype(int),
-                missed=(dfm["status"] == "✗").astype(int),
-                pending=(dfm["status"] == "").astype(int),
-            )
-            .groupby("specialist", as_index=False)[["planned", "completed", "missed", "pending"]]
-            .sum()
-        )
-        resumen["tasa_cumplimiento"] = resumen.apply(
-            lambda r: (r["completed"] / (r["completed"] + r["missed"])) if (r["completed"] + r["missed"]) > 0 else 0,
-            axis=1,
-        )
-        st.dataframe(resumen.sort_values("planned", ascending=False), use_container_width=True)
-
-        c1, c2 = st.columns(2)
-        with c1:
-            st.caption("Carga (programadas) por especialista")
-            st.bar_chart(resumen.set_index("specialist")["planned"])
-        with c2:
-            st.caption("Cumplidas vs. Incumplidas (suma mensual)")
-            chart_df = resumen.set_index("specialist")[["completed", "missed"]]
-            st.bar_chart(chart_df)
-
-# --- Carga diaria / calendario ---
+# --- Calendario / recordatorios ---
 with tab_cal:
-    st.subheader("Carga diaria de actividades por especialista")
-    st.caption("Vista tipo calendario para revisar cuántas actividades tiene cada especialista en cada día del mes.")
-    dfc = get_month_records(month_first, month_last, specialist=None)
-    if dfc.empty:
-        st.info("Aún no hay actividades registradas en el mes seleccionado.")
+    st.subheader("Calendario de actividades y recordatorios")
+    if not actor_name and role == "Especialista":
+        st.info("Escribe tu nombre para visualizar tu calendario.")
     else:
-        dfc["day"] = pd.to_datetime(dfc["scheduled_date"]).dt.day
-        matriz_carga = (
-            dfc.assign(carga=1)
-            .pivot_table(index="specialist", columns="day", values="carga", aggfunc="sum", fill_value=0)
-            .reindex(columns=list(range(1, month_last.day + 1)), fill_value=0)
-            .reset_index()
-        )
-        matriz_carga["Total mes"] = matriz_carga.drop(columns=["specialist"]).sum(axis=1)
-        st.dataframe(matriz_carga, use_container_width=True, hide_index=True)
+        specialist_scope = actor_name.strip() if role == "Especialista" else None
+        dfc = get_month_records(month_first, month_last, specialist=specialist_scope)
 
-        especialista_sel = st.selectbox("Ver detalle por especialista", sorted(dfc["specialist"].dropna().unique()))
-        df_esp = dfc[dfc["specialist"] == especialista_sel].copy()
-        if not df_esp.empty:
-            resumen_dia = (
-                df_esp.groupby("scheduled_date", as_index=False)
-                .agg(actividades=("id", "count"))
-                .sort_values("scheduled_date")
-            )
-            st.caption(f"Detalle diario de {especialista_sel}")
-            st.bar_chart(resumen_dia.set_index("scheduled_date")["actividades"])
+        if dfc.empty:
+            st.info("Aún no hay actividades registradas en el mes seleccionado.")
+        else:
+            dfc["scheduled_date"] = pd.to_datetime(dfc["scheduled_date"]).dt.date
+            dfc["day"] = pd.to_datetime(dfc["scheduled_date"]).dt.day
 
+            if role == "Especialista":
+                st.caption("Solo ves tus actividades del mes seleccionado.")
+                matriz = (
+                    dfc.assign(carga=1)
+                    .pivot_table(index="activity", columns="day", values="carga", aggfunc="sum", fill_value=0)
+                    .reindex(columns=list(range(1, month_last.day + 1)), fill_value=0)
+                    .reset_index()
+                )
+                st.dataframe(matriz, use_container_width=True, hide_index=True)
+
+                st.markdown("**Próximos deadlines (recordatorio)**")
+                proximas = dfc[dfc["scheduled_date"] >= today].sort_values("scheduled_date")[["scheduled_date", "activity", "unit", "status", "notes"]]
+                if proximas.empty:
+                    st.success("No tienes actividades futuras pendientes en este mes.")
+                else:
+                    st.dataframe(proximas, use_container_width=True, hide_index=True)
+            else:
+                st.caption("Vista consolidada por especialista (administración).")
+                matriz_carga = (
+                    dfc.assign(carga=1)
+                    .pivot_table(index="specialist", columns="day", values="carga", aggfunc="sum", fill_value=0)
+                    .reindex(columns=list(range(1, month_last.day + 1)), fill_value=0)
+                    .reset_index()
+                )
+                matriz_carga["Total mes"] = matriz_carga.drop(columns=["specialist"]).sum(axis=1)
+                st.dataframe(matriz_carga, use_container_width=True, hide_index=True)
 
 # --- Exportar ---
 with tab_export:
@@ -418,7 +404,12 @@ with tab_export:
 
     st.divider()
     st.markdown("### Exportar matriz")
-    exp_especialista = st.text_input("Filtrar por especialista (opcional)", value="")
+    if role == "Especialista":
+        exp_especialista = actor_name.strip()
+        st.caption(f"Exportación limitada a tus registros: {exp_especialista}")
+    else:
+        exp_especialista = st.text_input("Filtrar por especialista (opcional)", value="")
+
     if st.button("Generar Excel"):
         df_export = get_month_records(month_first, month_last, specialist=(exp_especialista.strip() or None))
 
