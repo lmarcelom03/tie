@@ -312,7 +312,15 @@ with tab_cal:
                 else:
                     st.dataframe(proximas, use_container_width=True, hide_index=True)
             else:
-                st.caption("Vista consolidada por especialista (administración).")
+                st.caption("Selecciona un día para ver actividades agrupadas por especialista.")
+                dia_consulta = st.date_input(
+                    "Día del calendario",
+                    value=today if month_first <= today <= month_last else month_first,
+                    min_value=month_first,
+                    max_value=month_last,
+                    key="cal_admin_day",
+                )
+
                 matriz_carga = (
                     dfc.assign(carga=1)
                     .pivot_table(index="specialist", columns="day", values="carga", aggfunc="sum", fill_value=0)
@@ -321,6 +329,19 @@ with tab_cal:
                 )
                 matriz_carga["Total mes"] = matriz_carga.drop(columns=["specialist"]).sum(axis=1)
                 st.dataframe(matriz_carga, use_container_width=True, hide_index=True)
+
+                dfd = dfc[dfc["scheduled_date"] == dia_consulta].copy()
+                if dfd.empty:
+                    st.info(f"No hay actividades programadas para el día {dia_consulta.isoformat()}.")
+                else:
+                    st.markdown(f"**Actividades del día {dia_consulta.isoformat()} agrupadas por especialista**")
+                    grouped = dfd.sort_values(["specialist", "activity"]).groupby("specialist", as_index=False)
+                    for _, row in grouped:
+                        especialista = row["specialist"].iloc[0]
+                        with st.expander(f"👤 {especialista} ({len(row)} actividad(es))", expanded=True):
+                            show = row[["activity", "unit", "status", "notes"]].copy()
+                            show.columns = ["Actividad", "UM", "Estado", "Notas"]
+                            st.dataframe(show, use_container_width=True, hide_index=True)
 
 # --- Registro múltiple desde Excel ---
 with tab_lote:
