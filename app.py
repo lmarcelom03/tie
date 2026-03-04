@@ -91,8 +91,8 @@ month_first, month_last = month_bounds(selected_month)
 st.title("📋 Registro de Actividades")
 st.caption("Registra actividades por día y marca el resultado: ✓ cumplido / ✗ incumplido.")
 
-tab_reg, tab_estado, tab_cal, tab_export, tab_admin = st.tabs(
-    ["➕ Registrar", "✅/✗ Mis actividades", "🗓️ Calendario", "⬇️ Exportar", "🛡️ Admin"]
+tab_reg, tab_estado, tab_cal, tab_lote, tab_export, tab_admin = st.tabs(
+    ["➕ Registrar", "✅/✗ Mis actividades", "🗓️ Calendario", "🧩 Registro múltiple", "⬇️ Exportar", "🛡️ Admin"]
 )
 
 # --- Registrar ---
@@ -321,6 +321,95 @@ with tab_cal:
                 )
                 matriz_carga["Total mes"] = matriz_carga.drop(columns=["specialist"]).sum(axis=1)
                 st.dataframe(matriz_carga, use_container_width=True, hide_index=True)
+
+# --- Registro múltiple desde Excel ---
+with tab_lote:
+    st.subheader("Registro múltiple de estado y fecha")
+    st.caption("Sube el Excel del formato de la app, edita en bloque y aplica los cambios de manera masiva.")
+
+    archivo_lote = st.file_uploader(
+        "Subir Excel para edición múltiple",
+        type=["xlsx"],
+        key="uploader_lote",
+        help="Formato esperado: id, especialista, actividad, unidad, fecha_programada, estado, notas.",
+    )
+
+    if archivo_lote is not None:
+        try:
+            df_lote = pd.read_excel(archivo_lote)
+            df_lote.columns = [str(c).strip().lower() for c in df_lote.columns]
+
+            rename_map = {
+                "especialista": "specialist",
+                "actividad": "activity",
+                "unidad": "unit",
+                "fecha_programada": "scheduled_date",
+                "estado": "status",
+                "notas": "notes",
+            }
+            df_lote = df_lote.rename(columns=rename_map)
+
+            req = {"specialist", "activity", "unit", "scheduled_date"}
+            if not req.issubset(set(df_lote.columns)):
+                st.error("El archivo no tiene las columnas mínimas requeridas: especialista, actividad, unidad, fecha_programada.")
+            else:
+                for col in ["id", "status", "notes"]:
+                    if col not in df_lote.columns:
+                        df_lote[col] = ""
+
+                if pd.api.types.is_datetime64_any_dtype(df_lote["scheduled_date"]):
+                    df_lote["scheduled_date"] = df_lote["scheduled_date"].dt.date
+                else:
+                    df_lote["scheduled_date"] = pd.to_datetime(df_lote["scheduled_date"], errors="coerce").dt.date
+
+                if not admin_mode:
+                    df_lote = df_lote[df_lote["specialist"].astype(str).str.strip() == actor_name.strip()]
+                    st.caption("Por seguridad, solo puedes aplicar cambios masivos sobre tus propias actividades.")
+
+                if df_lote.empty:
+                    st.info("No hay filas disponibles para edición con el filtro actual.")
+                else:
+                    editable = df_lote[["id", "specialist", "activity", "unit", "scheduled_date", "status", "notes"]].copy()
+                    edited_lote = st.data_editor(
+                        editable,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "id": st.column_config.NumberColumn("ID", disabled=not admin_mode),
+                            "specialist": st.column_config.TextColumn("Especialista", disabled=not admin_mode),
+                            "activity": st.column_config.TextColumn("Actividad", disabled=not admin_mode),
+                            "unit": st.column_config.TextColumn("UM", disabled=not admin_mode),
+                            "scheduled_date": st.column_config.DateColumn("Fecha programada"),
+                            "status": st.column_config.SelectboxColumn("Estado", options=["", "✓", "✗", "Cumplido", "Incumplido", "Pendiente"], required=False),
+                            "notes": st.column_config.TextColumn("Notas", width="large"),
+                        },
+                        key="editor_lote",
+                    )
+
+                    if st.button("Aplicar registro múltiple", key="btn_lote"):
+                        edited_lote["scheduled_date"] = pd.to_datetime(edited_lote["scheduled_date"], errors="coerce").dt.date.astype(str)
+                        edited_lote["status"] = (
+                            edited_lote["status"].astype(str).str.strip().replace({
+                                "Cumplido": "✓",
+                                "cumplido": "✓",
+                                "Incumplido": "✗",
+                                "incumplido": "✗",
+                                "Pendiente": "",
+                                "pendiente": "",
+                                "nan": "",
+                            })
+                        )
+                        records = edited_lote.fillna("").to_dict("records")
+                        actor = (actor_name or "IMPORTADOR").strip()
+                        inserted, updated, errors = upsert_records_from_excel(records, actor)
+                        st.success(f"Proceso masivo completado. Insertados: {inserted} | Actualizados: {updated}")
+                        if errors:
+                            st.warning("Se detectaron filas con error:")
+                            for err in errors[:50]:
+                                st.write(f"- {err}")
+        except Exception as e:
+            st.error(f"No se pudo procesar el archivo para registro múltiple: {e}")
+
 
 # --- Exportar ---
 with tab_export:
