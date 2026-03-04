@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import shutil
 import sqlite3
 from datetime import datetime, date, timedelta
 from pathlib import Path
@@ -10,13 +12,37 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-DB_PATH = Path("data/app.db")
+DB_DIR = Path(os.getenv("APP_DATA_DIR", Path(__file__).resolve().parent / "data"))
+DB_PATH = DB_DIR / "app.db"
+BACKUP_DIR = DB_DIR / "backups"
+
+def get_db_path() -> str:
+    return str(DB_PATH)
+
+def _restore_from_latest_backup_if_needed() -> None:
+    if DB_PATH.exists():
+        return
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    backups = sorted(BACKUP_DIR.glob("app_*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if backups:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(backups[0], DB_PATH)
+
+def _backup_db() -> None:
+    if not DB_PATH.exists():
+        return
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    backup_name = f"app_{datetime.now().strftime('%Y%m%d')}.db"
+    backup_path = BACKUP_DIR / backup_name
+    if not backup_path.exists():
+        shutil.copy2(DB_PATH, backup_path)
 
 def _now_iso() -> str:
     return datetime.now().replace(microsecond=0).isoformat(sep=" ")
 
 def get_conn() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _restore_from_latest_backup_if_needed()
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
@@ -51,6 +77,7 @@ def init_db() -> None:
         )
         """)
         conn.commit()
+    _backup_db()
 
 def add_scheduled_records(records: list[dict[str, Any]]) -> None:
     if not records:
@@ -72,6 +99,7 @@ def add_scheduled_records(records: list[dict[str, Any]]) -> None:
                 r.get("created_by", "—") or "—",
             ))
         conn.commit()
+    _backup_db()
 
 def get_month_records(date_from: date, date_to: date, specialist: str | None = None) -> pd.DataFrame:
     q = """
@@ -109,7 +137,7 @@ def update_records_status_and_notes(changes: list[dict[str, Any]]) -> None:
                 int(ch["id"]),
             ))
         conn.commit()
-
+    _backup_db()
 
 
 def upsert_records_from_excel(records: list[dict[str, Any]], actor: str) -> tuple[int, int, list[str]]:
@@ -169,8 +197,10 @@ def upsert_records_from_excel(records: list[dict[str, Any]], actor: str) -> tupl
             except Exception as e:
                 errors.append(f"Fila {idx}: error inesperado ({e}).")
         conn.commit()
+    _backup_db()
 
     return inserted, updated, errors
+
 def admin_update_scheduled_date(record_id: int, new_date: str, actor: str, reason: str) -> bool:
     with get_conn() as conn:
         row = conn.execute("SELECT scheduled_date FROM scheduled_activities WHERE id = ?", (record_id,)).fetchone()
@@ -184,6 +214,7 @@ def admin_update_scheduled_date(record_id: int, new_date: str, actor: str, reaso
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """, ("UPDATE_DATE", record_id, old, new_date, actor, reason, _now_iso()))
         conn.commit()
+        _backup_db()
         return True
 
 def admin_delete_record(record_id: int, actor: str, reason: str) -> bool:
@@ -198,6 +229,7 @@ def admin_delete_record(record_id: int, actor: str, reason: str) -> bool:
         VALUES (?, ?, ?, ?, ?, ?, ?)
         """, ("DELETE", record_id, old, None, actor, reason, _now_iso()))
         conn.commit()
+        _backup_db()
         return True
 
 # ---------- Excel export (matrix style) ----------
