@@ -16,6 +16,7 @@ from db import (
     admin_update_scheduled_date,
     admin_delete_record,
     upsert_records_from_excel,
+    get_db_path,
 )
 
 st.set_page_config(page_title="Registro de Actividades", layout="wide")
@@ -81,6 +82,7 @@ if actor_name:
 else:
     st.sidebar.warning("Escribe tu nombre para registrar/actualizar actividades.")
 
+st.sidebar.caption(f"Persistencia de datos: {get_db_path()}")
 st.sidebar.divider()
 today = date.today()
 selected_month = st.sidebar.date_input("Mes de trabajo", value=today, help="Se usa para filtrar el tablero y la matriz mensual.")
