@@ -1,0 +1,2 @@
+Command: stata -b do tesis_resultados.do
+Result: command not found: stata
